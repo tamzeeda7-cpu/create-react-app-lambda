@@ -1,108 +1,616 @@
-## Create-React-App-Lambda
+import React, { useState, useRef, useEffect } from 'react';
+import { Camera, Upload, Download, RotateCcw, CheckCircle, AlertCircle } from 'lucide-react';
 
-This project is a reference demo showing you how to use [Create React App v3](https://github.com/facebookincubator/create-react-app) and [netlify-lambda v1](https://github.com/netlify/netlify-lambda) together in a [Netlify Dev](https://www.netlify.com/docs/cli/?utm_source=github&utm_medium=swyx-CRAL&utm_campaign=devex#netlify-dev-beta) workflow. You can clone this and immediately be productive with a React app with serverless Netlify Functions in the same repo. Alternatively you can deploy straight to Netlify with this one-click Deploy:
+const PANPhotoUploader = () => {
+  // Photo: 3.5cm x 2.5cm @ 200 DPI = 276 x 196 pixels
+  // Signature: 2cm x 4.5cm @ 200 DPI = 158 x 354 pixels
+  
+  const PHOTO_WIDTH = 276;
+  const PHOTO_HEIGHT = 196;
+  const PHOTO_DPI = 200;
+  const PHOTO_MAX_SIZE = 50 * 1024; // 50 KB
+  
+  const SIGNATURE_WIDTH = 158;
+  const SIGNATURE_HEIGHT = 354;
+  const SIGNATURE_DPI = 200;
+  const SIGNATURE_MAX_SIZE = 50 * 1024; // 50 KB
 
+  const [photoData, setPhotoData] = useState(null);
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoError, setPhotoError] = useState('');
+  const [photoSuccess, setPhotoSuccess] = useState('');
+  
+  const [signatureData, setSignatureData] = useState(null);
+  const [signatureFile, setSignatureFile] = useState(null);
+  const [signatureError, setSignatureError] = useState('');
+  const [signatureSuccess, setSignatureSuccess] = useState('');
+  
+  const [photoMode, setPhotoMode] = useState('gallery'); // 'gallery' or 'camera'
+  const [signatureMode, setSignatureMode] = useState('gallery');
+  
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const photoInputRef = useRef(null);
+  const signatureInputRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+  const isDrawingRef = useRef(false);
+  
+  // ===== PHOTO FUNCTIONS =====
+  const startPhotoCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user' }
+      });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        cameraStreamRef.current = stream;
+        setPhotoError('');
+      }
+    } catch (err) {
+      setPhotoError('Camera access denied. Please allow camera access.');
+    }
+  };
 
-[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg?utm_source=github&utm_medium=swyx-CRAL&utm_campaign=devex)](https://app.netlify.com/start/deploy?repository=https://github.com/netlify/create-react-app-lambda&utm_source=github&utm_medium=swyx-CRAL&utm_campaign=devex)
+  const stopPhotoCamera = () => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach(track => track.stop());
+    }
+  };
 
-> ⚠️NOTE: You may not need this project at all. [Netlify Dev](https://github.com/netlify/netlify-dev-plugin) works with `create-react-app` out of the box! Only use `netlify-lambda` if you need a build step for your functions, eg if you want to use Babel or TypeScript ([see its README for details](https://github.com/netlify/netlify-lambda/blob/master/README.md#netlify-lambda)).
+  const capturePhotoFromCamera = () => {
+    if (!videoRef.current || videoRef.current.videoWidth === 0) {
+      setPhotoError('Camera not ready. Please wait or start camera again.');
+      return;
+    }
 
-## Project Setup
+    const canvas = document.createElement('canvas');
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(videoRef.current, 0, 0);
+    
+    // Crop to square first
+    const size = Math.min(canvas.width, canvas.height);
+    const x = (canvas.width - size) / 2;
+    const y = (canvas.height - size) / 2;
+    
+    const squareCanvas = document.createElement('canvas');
+    squareCanvas.width = size;
+    squareCanvas.height = size;
+    const squareCtx = squareCanvas.getContext('2d');
+    squareCtx.drawImage(canvas, x, y, size, size, 0, 0, size, size);
+    
+    // Resize to exact photo dimensions (276x196)
+    processPhotoImage(squareCanvas.toDataURL('image/jpeg', 0.95));
+    stopPhotoCamera();
+    setPhotoMode('gallery');
+  };
 
-**Source**: The main addition to base Create-React-App is a new folder: `src/lambda`. This folder is specified and can be changed in the `package.json` script: `"build:lambda": "netlify-lambda build src/lambda"`.
+  const handlePhotoFromGallery = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        processPhotoImage(event.target.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
-**Dist**: Each JavaScript file in there will be built for Netlify Function deployment in `/built-lambda`, specified in [`netlify.toml`](https://www.netlify.com/docs/netlify-toml-reference/?utm_source=github&utm_medium=swyx-CRAL&utm_campaign=devex).
+  const processPhotoImage = (imageSrc) => {
+    const img = new Image();
+    img.onload = () => {
+      // Create canvas with exact photo dimensions
+      const canvas = document.createElement('canvas');
+      canvas.width = PHOTO_WIDTH;
+      canvas.height = PHOTO_HEIGHT;
+      const ctx = canvas.getContext('2d');
+      
+      // White background
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Calculate aspect ratios
+      const imgAspect = img.width / img.height;
+      const canvasAspect = PHOTO_WIDTH / PHOTO_HEIGHT;
+      
+      let drawWidth, drawHeight, drawX, drawY;
+      
+      if (imgAspect > canvasAspect) {
+        // Image is wider - fit to height
+        drawHeight = canvas.height;
+        drawWidth = drawHeight * imgAspect;
+        drawX = (canvas.width - drawWidth) / 2;
+        drawY = 0;
+      } else {
+        // Image is taller - fit to width
+        drawWidth = canvas.width;
+        drawHeight = drawWidth / imgAspect;
+        drawX = 0;
+        drawY = (canvas.height - drawHeight) / 2;
+      }
+      
+      ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+      
+      // Convert to JPEG with compression and check size
+      const compressPhoto = (quality) => {
+        return new Promise((resolve) => {
+          canvas.toBlob(
+            (blob) => {
+              const jpegUrl = URL.createObjectURL(blob);
+              const jpegSize = blob.size;
+              
+              if (jpegSize > PHOTO_MAX_SIZE && quality > 0.4) {
+                // Try lower quality
+                compressPhoto(quality - 0.1).then(resolve);
+              } else {
+                const reader = new FileReader();
+                reader.onload = () => {
+                  setPhotoData(reader.result);
+                  setPhotoFile({
+                    size: jpegSize,
+                    sizeKB: (jpegSize / 1024).toFixed(2),
+                    width: PHOTO_WIDTH,
+                    height: PHOTO_HEIGHT,
+                    dpi: PHOTO_DPI,
+                    format: 'JPEG'
+                  });
+                  
+                  if (jpegSize <= PHOTO_MAX_SIZE) {
+                    setPhotoSuccess(`✓ Photo ready! Size: ${(jpegSize / 1024).toFixed(2)} KB`);
+                    setPhotoError('');
+                  } else {
+                    setPhotoError(`File size ${(jpegSize / 1024).toFixed(2)} KB exceeds 50 KB limit`);
+                  }
+                };
+                reader.readAsDataURL(blob);
+              }
+            },
+            'image/jpeg',
+            quality
+          );
+        });
+      };
+      
+      compressPhoto(0.95);
+    };
+    img.src = imageSrc;
+  };
 
-As an example, we've included a small `src/lambda/hello.js` function, which will be deployed to `/.netlify/functions/hello`. We've also included an async lambda example using async/await syntax in `async-dadjoke.js`.
+  const downloadPhoto = () => {
+    if (photoData) {
+      const link = document.createElement('a');
+      link.href = photoData;
+      link.download = `PAN-Photo-${Date.now()}.jpg`;
+      link.click();
+    }
+  };
 
-## Video
+  // ===== SIGNATURE FUNCTIONS =====
+  const initializeSignatureCanvas = () => {
+    if (canvasRef.current) {
+      const canvas = canvasRef.current;
+      canvas.width = SIGNATURE_WIDTH;
+      canvas.height = SIGNATURE_HEIGHT;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+    }
+  };
 
-Learn how to set this up yourself (and why everything is the way it is) from scratch in a video: https://www.youtube.com/watch?v=3ldSM98nCHI
+  useEffect(() => {
+    if (signatureMode === 'draw') {
+      initializeSignatureCanvas();
+    }
+  }, [signatureMode]);
 
-## Babel/webpack compilation
+  const startDrawing = (e) => {
+    if (!canvasRef.current) return;
+    isDrawingRef.current = true;
+    
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    
+    const ctx = canvas.getContext('2d');
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  };
 
-All functions (inside `src/lambda`) are compiled with webpack using Babel, so you can use modern JavaScript, import npm modules, etc., without any extra setup.
+  const draw = (e) => {
+    if (!isDrawingRef.current || !canvasRef.current) return;
+    
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    
+    const ctx = canvas.getContext('2d');
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  };
 
-## Local Development
+  const endDrawing = () => {
+    isDrawingRef.current = false;
+  };
 
-```bash
-## prep steps for first time users
-npm i -g netlify-cli # Make sure you have the [Netlify CLI](https://github.com/netlify/cli) installed
-git clone https://github.com/netlify/create-react-app-lambda ## clone this repo
-cd create-react-app-lambda ## change into this repo
-yarn # install all dependencies
+  const saveSignatureFromCanvas = () => {
+    if (canvasRef.current) {
+      canvasRef.current.toBlob(
+        (blob) => {
+          const jpegSize = blob.size;
+          
+          if (jpegSize > SIGNATURE_MAX_SIZE) {
+            setSignatureError(`File size ${(jpegSize / 1024).toFixed(2)} KB exceeds 50 KB limit`);
+            return;
+          }
+          
+          const reader = new FileReader();
+          reader.onload = () => {
+            setSignatureData(reader.result);
+            setSignatureFile({
+              size: jpegSize,
+              sizeKB: (jpegSize / 1024).toFixed(2),
+              width: SIGNATURE_WIDTH,
+              height: SIGNATURE_HEIGHT,
+              dpi: SIGNATURE_DPI,
+              format: 'JPEG'
+            });
+            setSignatureSuccess(`✓ Signature ready! Size: ${(jpegSize / 1024).toFixed(2)} KB`);
+            setSignatureError('');
+            setSignatureMode('gallery');
+          };
+          reader.readAsDataURL(blob);
+        },
+        'image/jpeg',
+        0.95
+      );
+    }
+  };
 
-## done every time you start up this project
-ntl dev ## nice shortcut for `netlify dev`, starts up create-react-app AND a local Node.js server for your Netlify functions
-```
+  const handleSignatureFromGallery = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      if (file.size > SIGNATURE_MAX_SIZE) {
+        setSignatureError(`File size exceeds 50 KB limit. Please choose a smaller file.`);
+        return;
+      }
+      
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        processSignatureImage(event.target.result, file);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
-This fires up [Netlify Dev](https://www.netlify.com/docs/cli/?utm_source=github&utm_medium=swyx-CRAL&utm_campaign=devex#netlify-dev-beta), which:
+  const processSignatureImage = (imageSrc, originalFile) => {
+    const img = new Image();
+    img.onload = () => {
+      // Create canvas with exact signature dimensions
+      const canvas = document.createElement('canvas');
+      canvas.width = SIGNATURE_WIDTH;
+      canvas.height = SIGNATURE_HEIGHT;
+      const ctx = canvas.getContext('2d');
+      
+      // White background
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Calculate aspect ratios
+      const imgAspect = img.width / img.height;
+      const canvasAspect = SIGNATURE_WIDTH / SIGNATURE_HEIGHT;
+      
+      let drawWidth, drawHeight, drawX, drawY;
+      
+      if (imgAspect > canvasAspect) {
+        // Image is wider - fit to height
+        drawHeight = canvas.height;
+        drawWidth = drawHeight * imgAspect;
+        drawX = (canvas.width - drawWidth) / 2;
+        drawY = 0;
+      } else {
+        // Image is taller - fit to width
+        drawWidth = canvas.width;
+        drawHeight = drawWidth / imgAspect;
+        drawX = 0;
+        drawY = (canvas.height - drawHeight) / 2;
+      }
+      
+      ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+      
+      const compressSignature = (quality) => {
+        canvas.toBlob(
+          (blob) => {
+            const jpegSize = blob.size;
+            
+            if (jpegSize > SIGNATURE_MAX_SIZE && quality > 0.4) {
+              compressSignature(quality - 0.1);
+            } else {
+              const reader = new FileReader();
+              reader.onload = () => {
+                setSignatureData(reader.result);
+                setSignatureFile({
+                  size: jpegSize,
+                  sizeKB: (jpegSize / 1024).toFixed(2),
+                  width: SIGNATURE_WIDTH,
+                  height: SIGNATURE_HEIGHT,
+                  dpi: SIGNATURE_DPI,
+                  format: 'JPEG'
+                });
+                
+                if (jpegSize <= SIGNATURE_MAX_SIZE) {
+                  setSignatureSuccess(`✓ Signature ready! Size: ${(jpegSize / 1024).toFixed(2)} KB`);
+                  setSignatureError('');
+                } else {
+                  setSignatureError(`File size ${(jpegSize / 1024).toFixed(2)} KB exceeds 50 KB limit`);
+                }
+              };
+              reader.readAsDataURL(blob);
+            }
+          },
+          'image/jpeg',
+          quality
+        );
+      };
+      
+      compressSignature(0.95);
+    };
+    img.src = imageSrc;
+  };
 
-- Detects that you are running a `create-react-app` project and runs the npm script that contains `react-scripts start`, which in this project is the `start` script
-- Detects that you use `netlify-lambda` as a [function builder](https://github.com/netlify/netlify-dev-plugin/#function-builders-function-builder-detection-and-relationship-with-netlify-lambda), and runs the npm script that contains `netlify-lambda build`, which in this project is the `build:lambda` script.
+  const clearSignature = () => {
+    initializeSignatureCanvas();
+  };
 
-You can view the project locally via Netlify Dev, via `localhost:8888`.
+  const downloadSignature = () => {
+    if (signatureData) {
+      const link = document.createElement('a');
+      link.href = signatureData;
+      link.download = `PAN-Signature-${Date.now()}.jpg`;
+      link.click();
+    }
+  };
 
-Each function will be available at the same port as well:
+  const downloadBoth = () => {
+    if (photoData && signatureData) {
+      // Create a zip-like structure by downloading both
+      downloadPhoto();
+      setTimeout(() => downloadSignature(), 500);
+    }
+  };
 
-- `http://localhost:8888/.netlify/functions/hello` and 
-- `http://localhost:8888/.netlify/functions/async-dadjoke`
+  const resetAll = () => {
+    setPhotoData(null);
+    setPhotoFile(null);
+    setPhotoError('');
+    setPhotoSuccess('');
+    setSignatureData(null);
+    setSignatureFile(null);
+    setSignatureError('');
+    setSignatureSuccess('');
+    stopPhotoCamera();
+  };
 
-## Deployment
+  return (
+    <div className="min-h-screen p-6" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600;700&display=swap');
+        
+        * {
+          font-family: 'Segoe UI', sans-serif;
+        }
+        
+        .glass-card {
+          background: rgba(255, 255, 255, 0.95);
+          backdrop-filter: blur(10px);
+          border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .btn-primary {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+          border: none;
+          padding: 10px 20px;
+          border-radius: 8px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.3s ease;
+        }
+        
+        .btn-primary:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-secondary {
+          background: #f0f0f0;
+          color: #333;
+          border: 2px solid #ddd;
+          padding: 10px 20px;
+          border-radius: 8px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.3s ease;
+        }
+        
+        .btn-secondary:hover {
+          background: #e0e0e0;
+          border-color: #667eea;
+        }
+        
+        .success-msg {
+          background: #d4edda;
+          border: 1px solid #c3e6cb;
+          color: #155724;
+          padding: 12px;
+          border-radius: 6px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-weight: 500;
+        }
+        
+        .error-msg {
+          background: #f8d7da;
+          border: 1px solid #f5c6cb;
+          color: #721c24;
+          padding: 12px;
+          border-radius: 6px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-weight: 500;
+        }
+        
+        .canvas-container {
+          border: 2px dashed #667eea;
+          border-radius: 8px;
+          padding: 10px;
+          background: #fafafa;
+        }
+        
+        canvas {
+          cursor: crosshair;
+          touch-action: none;
+        }
+        
+        video {
+          border-radius: 8px;
+          width: 100%;
+        }
+        
+        .spec-box {
+          background: #f8f9fa;
+          border-left: 4px solid #667eea;
+          padding: 12px;
+          border-radius: 4px;
+          font-size: 13px;
+          margin: 10px 0;
+        }
+      `}</style>
 
-During deployment, this project is configured, inside `netlify.toml` to run the build `command`: `yarn build`.
+      <div className="max-w-5xl mx-auto">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <h1 className="text-4xl font-bold text-white mb-2">📸 PAN Card Photo Uploader</h1>
+          <p className="text-white text-opacity-90">Official dimensions • Automatic compression • Quality verification</p>
+        </div>
 
-`yarn build` corresponds to the npm script `build`, which uses `npm-run-all` (aka `run-p`) to concurrently run `"build:app"` (aka `react-scripts build`) and `build:lambda` (aka `netlify-lambda build src/lambda`).
+        <div className="grid md:grid-cols-2 gap-6 mb-6">
+          {/* ===== PHOTOGRAPH SECTION ===== */}
+          <div className="glass-card rounded-xl p-8 shadow-2xl">
+            <h2 className="text-2xl font-bold text-gray-800 mb-2 flex items-center gap-2">
+              <Camera size={28} /> Photograph
+            </h2>
+            <div className="spec-box">
+              <p><strong>Size:</strong> 3.5 cm × 2.5 cm</p>
+              <p><strong>Resolution:</strong> 200 DPI (276 × 196 px)</p>
+              <p><strong>Format:</strong> JPEG</p>
+              <p><strong>Max Size:</strong> 50 KB</p>
+              <p><strong>Background:</strong> White</p>
+            </div>
 
-## Typescript
+            <div className="space-y-4 mt-6">
+              {/* Mode toggle */}
+              <div className="flex gap-3 mb-4">
+                <button
+                  onClick={() => setPhotoMode('gallery')}
+                  className={`flex-1 py-2 rounded-lg font-semibold transition ${
+                    photoMode === 'gallery'
+                      ? 'btn-primary'
+                      : 'btn-secondary'
+                  }`}
+                >
+                  📱 Gallery
+                </button>
+                <button
+                  onClick={() => setPhotoMode('camera')}
+                  className={`flex-1 py-2 rounded-lg font-semibold transition ${
+                    photoMode === 'camera'
+                      ? 'btn-primary'
+                      : 'btn-secondary'
+                  }`}
+                >
+                  📷 Camera
+                </button>
+              </div>
 
-<details>
-  <summary>
-    <b id="typescript">Click for instructions</b>
-  </summary>
+              {/* Gallery Mode */}
+              {photoMode === 'gallery' && (
+                <>
+                  <input
+                    type="file"
+                    ref={photoInputRef}
+                    onChange={handlePhotoFromGallery}
+                    accept="image/*"
+                    className="hidden"
+                  />
+                  <button
+                    onClick={() => photoInputRef.current?.click()}
+                    className="btn-primary w-full py-3 flex items-center justify-center gap-2"
+                  >
+                    <Upload size={20} /> Choose from Gallery
+                  </button>
+                </>
+              )}
 
-You can use Typescript in both your frontend React code (with `react-scripts` v2.1+) and your serverless functions (with `netlify-lambda` v1.1+). Follow these instructions:
+              {/* Camera Mode */}
+              {photoMode === 'camera' && (
+                <>
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    className="w-full bg-black"
+                    style={{ height: '250px', objectFit: 'cover' }}
+                  />
+                  <div className="grid grid-cols-3 gap-2">
+                    <button onClick={startPhotoCamera} className="btn-primary py-2 text-sm">
+                      Start
+                    </button>
+                    <button onClick={capturePhotoFromCamera} className="btn-primary py-2 text-sm">
+                      Capture
+                    </button>
+                    <button onClick={stopPhotoCamera} className="btn-secondary py-2 text-sm">
+                      Stop
+                    </button>
+                  </div>
+                </>
+              )}
 
-1. `yarn add -D typescript @types/node @types/react @types/react-dom @babel/preset-typescript @types/aws-lambda`
-2. convert `src/lambda/hello.js` to `src/lambda/hello.ts`
-3. use types in your event handler:
+              {/* Photo Messages */}
+              {photoSuccess && <div className="success-msg"><CheckCircle size={18} /> {photoSuccess}</div>}
+              {photoError && <div className="error-msg"><AlertCircle size={18} /> {photoError}</div>}
 
-```ts
-import { Handler, Context, Callback, APIGatewayEvent } from 'aws-lambda'
+              {/* Photo Preview */}
+              {photoData && (
+                <div className="space-y-3">
+                  <div className="border-2 border-gray-300 rounded-lg p-3 bg-white">
+                    <img src={photoData} alt="Photo Preview" className="w-full" />
+                  </div>
+                  {photoFile && (
+                    <div className="text-sm text-gray-600 space-y-1">
+                      <p>📏 <strong>{photoFile.width} × {photoFile.height} px</strong> ({photoFile.dpi} DPI)</p>
+                      <p>📦 Size: <strong>{photoFile.sizeKB} KB</strong> / 50 KB</p>
+                      <p>✅ Format: <strong>{photoFile.format}</strong></p>
+                    </div>
+                  )}
+                  <button
+                    onClick={downloadPhoto}
+                    className="btn-primary w-full py-2 flex items-center justify-center gap-2"
+                  >
+                    <Download size={18} /> Download Photo
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
 
-interface HelloResponse {
-  statusCode: number
-  body: string
-}
-
-const handler: Handler = (event: APIGatewayEvent, context: Context, callback: Callback) => {
-  const params = event.queryStringParameters
-  const response: HelloResponse = {
-    statusCode: 200,
-    body: JSON.stringify({
-      msg: `Hello world ${Math.floor(Math.random() * 10)}`,
-      params,
-    }),
-  }
-
-  callback(undefined, response)
-}
-
-export { handler }
-```
-
-rerun and see it work!
-
-You are free to set up your `tsconfig.json` and `tslint` as you see fit.
-
-</details>
-
-**If you want to try working in Typescript on the client and lambda side**: There are a bunch of small setup details to get right. Check https://github.com/sw-yx/create-react-app-lambda-typescript for a working starter.
-
-## Routing and authentication with Netlify Identity
-
-For a full demo of routing and authentication, check this branch: https://github.com/netlify/create-react-app-lambda/pull/18 This example will not be maintained but may be helpful.
-
-## Service Worker
-
-`create-react-app`'s default service worker (in `src/index.js`) does not work with lambda functions out of the box. It prevents calling the function and returns the app itself instead ([Read more](https://github.com/facebook/create-react-app/issues/2237#issuecomment-302693219)). To solve this you have to eject and enhance the service worker configuration in the webpack config. Whitelist the path of your lambda function and you are good to go.
+          {/* ===== SIGNATURE SECTION ===== */}
+          <div cla
